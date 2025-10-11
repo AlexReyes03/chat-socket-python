@@ -10,10 +10,10 @@ from utils import validar_mensaje, es_comando, procesar_comando
 # ============================================================================
 
 # OPCION 1: Cifrado Simétrico (Fernet/AES)
-from cifrado_simetrico import Cifrador
+# from cifrado_simetrico import Cifrador
 
 # OPCION 2: Cifrado Asimétrico (RSA)
-# from cifrado_asimetrico import Cifrador
+from cifrado_asimetrico import Cifrador
 
 # ===================== Línea separadora de dependencias =====================
 
@@ -28,9 +28,11 @@ class ServidorChat:
         self.servidor = None
         
         # Para simétrico
-        self.cifrador = Cifrador()
+        # self.cifrador = Cifrador()
         # Descomentar para asimétrico
-        # self.cifrador = Cifrador(es_servidor=True)
+        self.cifrador = Cifrador(es_servidor=True)
+        
+        self.es_asimetrico = hasattr(self.cifrador, '_validar_puede_descifrar')
         
     def iniciar_servidor(self):
         """Inicia el servidor y escucha conexiones"""
@@ -42,7 +44,8 @@ class ServidorChat:
             self.servidor.listen(5)
             print(f"Servidor principal:")
             print(f"Escuchando en el puerto {self.puerto}")
-            print(f"Tipo de cifrado: {'Simétrico (Fernet)' if 'simetrico' in str(type(self.cifrador).__module__) else 'Asimétrico (RSA)'}")
+            tipo_cifrado = "Asimétrico (RSA)" if self.es_asimetrico else "Simétrico (Fernet)"
+            print(f"Tipo de cifrado: {tipo_cifrado}")
             print("Comandos del servidor: /shutdown - Cerrar servidor")
             print("-" * 50)
             
@@ -111,7 +114,7 @@ class ServidorChat:
             
             cliente.settimeout(30.0)
             
-            nombre_cifrado = cliente.recv(1024).decode('utf-8').strip()
+            nombre_cifrado = cliente.recv(4096).decode('utf-8').strip()
             
             if not nombre_cifrado or not self.servidor_activo:
                 cliente.close()
@@ -140,7 +143,6 @@ class ServidorChat:
                     print(f"Registro rechazado desde {ip}: nombre '{nombre}' ya está en uso")
                     return
                 
-                # Registrar cliente exitosamente
                 self.clientes[cliente] = {
                     'nombre': nombre,
                     'ip': ip,
@@ -213,7 +215,7 @@ class ServidorChat:
                 try:
                     cliente.settimeout(1.0)
                     
-                    mensaje_cifrado = cliente.recv(1024).decode('utf-8')
+                    mensaje_cifrado = cliente.recv(4096).decode('utf-8')
                     if not mensaje_cifrado:
                         break
                     
@@ -252,22 +254,27 @@ class ServidorChat:
                         
                         info_cliente['ultimo_mensaje'] = tiempo_actual
                         
-                        nombre_cifrado, ip_cifrada, puerto_cifrado = self.cifrador.cifrar_datos_usuario(
-                            nombre, ip, puerto
-                        )
-                        mensaje_cifrado_enviar = self.cifrador.cifrar_mensaje(mensaje_limpio)
-                        
-                        print("\n\nDATOS CIFRADOS:")
-                        print(f"[{ip_cifrada[:20]}..., {puerto_cifrado[:20]}..., {nombre_cifrado[:20]}...] {mensaje_cifrado_enviar[:30]}...")
-                        print("\nDATOS DESCIFRADOS:")
-                        print(f"[{ip}, {puerto}, {nombre}] {mensaje_limpio}")
+                        if self.es_asimetrico:
+                            mensaje_completo = f"MENSAJE_CHAT:{ip}###SEP###{puerto}###SEP###{nombre}###SEP###{mensaje_limpio}"
+                            
+                            print("\n\nDATOS ENVIADOS (sin cifrar, RSA solo Cliente->Servidor):")
+                            print(f"[{ip}, {puerto}, {nombre}] {mensaje_limpio}")
+                        else:
+                            nombre_cifrado, ip_cifrada, puerto_cifrado = self.cifrador.cifrar_datos_usuario(nombre, ip, puerto)
+                            mensaje_cifrado_enviar = self.cifrador.cifrar_mensaje(mensaje_limpio)
+                            
+                            print("\n\nDATOS CIFRADOS:")
+                            print(f"[{ip_cifrada[:20]}..., {puerto_cifrado[:20]}..., {nombre_cifrado[:20]}...] {mensaje_cifrado_enviar[:30]}...")
+                            print("\nDATOS DESCIFRADOS:")
+                            print(f"[{ip}, {puerto}, {nombre}] {mensaje_limpio}")
+                            
+                            mensaje_completo = f"MENSAJE_CHAT:{ip_cifrada}###SEP###{puerto_cifrado}###SEP###{nombre_cifrado}###SEP###{mensaje_cifrado_enviar}"
                         
                         self.historial.append((tiempo_actual, nombre, ip, puerto, mensaje_limpio))
                         if len(self.historial) > 10:
                             self.historial.pop(0)
                         
-                        mensaje_completo_cifrado = f"MENSAJE_CHAT:{ip_cifrada}|||{puerto_cifrado}|||{nombre_cifrado}|||{mensaje_cifrado_enviar}"
-                        self.enviar_a_todos(mensaje_completo_cifrado, excluir=cliente)
+                        self.enviar_a_todos(mensaje_completo, excluir=cliente)
                         
                 except socket.timeout:
                     continue

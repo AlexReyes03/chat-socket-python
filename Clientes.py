@@ -8,10 +8,10 @@ import threading
 # ============================================================================
 
 # Cifrado Simétrico (Fernet/AES)
-from cifrado_simetrico import Cifrador
+# from cifrado_simetrico import Cifrador
 
 # Cifrado Asimétrico (RSA)
-# from cifrado_asimetrico import Cifrador
+from cifrado_asimetrico import Cifrador
 
 # ===================== Línea separadora de dependencias =====================
 
@@ -24,9 +24,11 @@ class ClienteChat:
         self.conectado = False
         
         # Para simétrico
-        self.cifrador = Cifrador()
+        # self.cifrador = Cifrador()
         # Descomentar para asimétrico
-        # self.cifrador = Cifrador(es_servidor=False)
+        self.cifrador = Cifrador(es_servidor=False)
+        
+        self.es_asimetrico = hasattr(self.cifrador, '_validar_puede_descifrar')
         
     def conectar(self):
         """Conecta al servidor de chat"""
@@ -36,7 +38,7 @@ class ClienteChat:
             
             print("Conectando al servidor...")
             
-            respuesta = self.cliente.recv(1024).decode('utf-8')
+            respuesta = self.cliente.recv(4096).decode('utf-8')
             if respuesta == "NOMBRE_USUARIO":
                 while True:
                     self.nombre = input("Ingresa tu nombre: ").strip()
@@ -51,11 +53,12 @@ class ClienteChat:
                         
                     self.cliente.send(nombre_cifrado.encode('utf-8'))
                     
-                    confirmacion = self.cliente.recv(1024).decode('utf-8')
+                    confirmacion = self.cliente.recv(4096).decode('utf-8')
                     
                     if confirmacion == "CONECTADO":
                         print("¡Bienvenido al chat!")
-                        print(f"Tipo de cifrado: {'Simétrico (Fernet)' if 'simetrico' in str(type(self.cifrador).__module__) else 'Asimétrico (RSA)'}")
+                        tipo_cifrado = "Asimétrico (RSA)" if self.es_asimetrico else "Simétrico (Fernet)"
+                        print(f"Tipo de cifrado: {tipo_cifrado}")
                         print("Comandos disponibles: /hist, /list, /quit, /help")
                         print("Escribe tus mensajes:")
                         print("-" * 50)
@@ -88,7 +91,7 @@ class ClienteChat:
         """Escucha mensajes del servidor en un hilo separado"""
         while self.conectado:
             try:
-                mensaje = self.cliente.recv(1024).decode('utf-8')
+                mensaje = self.cliente.recv(4096).decode('utf-8')
                 if not mensaje:
                     break
                     
@@ -101,16 +104,22 @@ class ClienteChat:
                     print(respuesta)
                 elif mensaje.startswith("MENSAJE_CHAT:"):
                     try:
-                        datos_cifrados = mensaje.replace("MENSAJE_CHAT:", "")
-                        partes = datos_cifrados.split("|||")
+                        datos = mensaje.replace("MENSAJE_CHAT:", "")
+                        partes = datos.split("###SEP###")
                         
                         if len(partes) == 4:
-                            ip_cifrada, puerto_cifrado, nombre_cifrado, mensaje_cifrado = partes
+                            ip_parte, puerto_parte, nombre_parte, mensaje_parte = partes
                             
-                            ip = self.cifrador.descifrar_mensaje(ip_cifrada)
-                            puerto = self.cifrador.descifrar_mensaje(puerto_cifrado)
-                            nombre = self.cifrador.descifrar_mensaje(nombre_cifrado)
-                            mensaje_texto = self.cifrador.descifrar_mensaje(mensaje_cifrado)
+                            if self.es_asimetrico:
+                                ip = ip_parte
+                                puerto = puerto_parte
+                                nombre = nombre_parte
+                                mensaje_texto = mensaje_parte
+                            else:
+                                ip = self.cifrador.descifrar_mensaje(ip_parte)
+                                puerto = self.cifrador.descifrar_mensaje(puerto_parte)
+                                nombre = self.cifrador.descifrar_mensaje(nombre_parte)
+                                mensaje_texto = self.cifrador.descifrar_mensaje(mensaje_parte)
                             
                             if mensaje_texto == "DESCONEXION_CLIENTE":
                                 continue
