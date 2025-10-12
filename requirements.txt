@@ -1,1 +1,25 @@
+# ==============================================================================
+# DEPENDENCIAS DEL PROYECTO: Sistema de Chat con Cifrado
+# ==============================================================================
+# Proyecto: Chat Multiusuario con Cifrado Simetrico y Asimetrico
+# Version: 2.0
+# Python: >= 3.8
+# ==============================================================================
 cryptography>=41.0.0
+# ==============================================================================
+# INSTRUCCIONES DE INSTALACION
+#
+# PASO 1: Verificar Python instalado
+#   Windows:     python --version
+#   Linux/macOS: python3 --version
+#
+# PASO 2: Instalar dependencias
+#   Metodo A (Recomendado):
+#     pip install -r requirements.txt
+#
+#   Metodo B (Alternativo):
+#     pip install cryptography>=41.0.0
+#
+# PASO 3: Verificar instalacion
+#   python -c "from cryptography.fernet import Fernet; print('OK')"
+# ==============================================================================
