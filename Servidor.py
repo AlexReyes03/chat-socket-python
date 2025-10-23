@@ -3,39 +3,24 @@ import threading
 import time
 from utils import validar_mensaje, es_comando, procesar_comando
 
-# ============================================================================
-# SELECCIONA EL TIPO DE CIFRADO QUE VAS A USAR:
-# Descomenta UNA de las siguientes líneas (deja la otra comentada)
-# IMPORTANTE: Debe ser el MISMO tipo que en Clientes.py
-# ============================================================================
-
-# OPCION 1: Cifrado Simétrico (Fernet/AES)
-# from cifrado_simetrico import Cifrador
-
-# OPCION 2: Cifrado Asimétrico (RSA)
-from cifrado_asimetrico import Cifrador
-
-# ===================== Línea separadora de dependencias =====================
+from cifrado_simetrico import Cifrador
+from validacion_integridad import ValidadorIntegridad
 
 class ServidorChat:
     def __init__(self, host='localhost', puerto=5555):
         self.host = host
         self.puerto = puerto
-        self.clientes = {}  # {socket: {'nombre': str, 'ip': str, 'ultimo_mensaje': float}}
-        self.historial = []  # Lista de mensajes [(timestamp, nombre, mensaje)]
+        self.clientes = {}
+        self.historial = []
         self.lock = threading.Lock()
         self.servidor_activo = True
         self.servidor = None
         
-        # Para simétrico
-        # self.cifrador = Cifrador()
-        # Descomentar para asimétrico
-        self.cifrador = Cifrador(es_servidor=True)
+        self.cifrador = Cifrador()
         
         self.es_asimetrico = hasattr(self.cifrador, '_validar_puede_descifrar')
         
     def iniciar_servidor(self):
-        """Inicia el servidor y escucha conexiones"""
         self.servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         
@@ -46,6 +31,7 @@ class ServidorChat:
             print(f"Escuchando en el puerto {self.puerto}")
             tipo_cifrado = "Asimétrico (RSA)" if self.es_asimetrico else "Simétrico (Fernet)"
             print(f"Tipo de cifrado: {tipo_cifrado}")
+            print(f"Validacion de integridad: SHA-256 activa")
             print("Comandos del servidor: /shutdown - Cerrar servidor")
             print("-" * 50)
             
@@ -83,7 +69,6 @@ class ServidorChat:
             self.cerrar_servidor()
     
     def manejar_comandos_servidor(self):
-        """Maneja los comandos del administrador del servidor"""
         while self.servidor_activo:
             try:
                 comando = input().strip()
@@ -105,7 +90,6 @@ class ServidorChat:
                     print(f"Error procesando comando: {e}")
     
     def procesar_nuevo_cliente(self, cliente, direccion):
-        """Procesa el registro de un nuevo cliente"""
         ip = direccion[0]
         puerto_cliente = direccion[1]
         
@@ -114,10 +98,18 @@ class ServidorChat:
             
             cliente.settimeout(30.0)
             
-            nombre_cifrado = cliente.recv(4096).decode('utf-8').strip()
+            nombre_con_hash = cliente.recv(4096).decode('utf-8').strip()
             
-            if not nombre_cifrado or not self.servidor_activo:
+            if not nombre_con_hash or not self.servidor_activo:
                 cliente.close()
+                return
+            
+            nombre_cifrado, hash_valido = ValidadorIntegridad.validar_y_extraer(nombre_con_hash)
+            
+            if not hash_valido or not nombre_cifrado:
+                cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
+                cliente.close()
+                print(f"[INTEGRIDAD] Registro rechazado desde {ip}: formato de hash invalido")
                 return
             
             nombre = self.cifrador.descifrar_mensaje(nombre_cifrado)
@@ -126,6 +118,14 @@ class ServidorChat:
                 cliente.send("NOMBRE_INVALIDO".encode('utf-8'))
                 cliente.close()
                 print(f"Registro rechazado desde {ip}: error al descifrar nombre")
+                return
+            
+            hash_recibido = nombre_con_hash.split("|||HASH|||")[1]
+            
+            if not ValidadorIntegridad.validar_integridad(nombre, hash_recibido):
+                cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
+                cliente.close()
+                print(f"[INTEGRIDAD] Registro rechazado desde {ip}: hash SHA-256 no coincide para nombre '{nombre}'")
                 return
             
             from utils import validar_nombre_usuario
@@ -174,7 +174,6 @@ class ServidorChat:
                 pass
 
     def procesar_shutdown(self):
-        """Procesa el comando de cierre del servidor con confirmación"""
         try:
             print("\n¿Está seguro de que desea cerrar el servidor? (y/Y para confirmar, cualquier otra tecla para cancelar)")
             confirmacion = input("Confirmación: ").strip()
@@ -209,20 +208,39 @@ class ServidorChat:
             self.servidor_activo = False
     
     def manejar_cliente(self, cliente):
-        """Maneja los mensajes de un cliente específico"""
         try:
             while self.servidor_activo:
                 try:
                     cliente.settimeout(1.0)
                     
-                    mensaje_cifrado = cliente.recv(4096).decode('utf-8')
-                    if not mensaje_cifrado:
+                    mensaje_con_hash = cliente.recv(4096).decode('utf-8')
+                    if not mensaje_con_hash:
                         break
+                    
+                    mensaje_cifrado, hash_valido = ValidadorIntegridad.validar_y_extraer(mensaje_con_hash)
+                    
+                    if not hash_valido or not mensaje_cifrado:
+                        cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
+                        with self.lock:
+                            if cliente in self.clientes:
+                                nombre = self.clientes[cliente]['nombre']
+                                print(f"[INTEGRIDAD] Mensaje rechazado de {nombre}: formato de hash invalido")
+                        continue
                     
                     mensaje = self.cifrador.descifrar_mensaje(mensaje_cifrado)
                     
                     if not mensaje:
                         cliente.send("MENSAJE_INVALIDO".encode('utf-8'))
+                        continue
+                    
+                    hash_recibido = mensaje_con_hash.split("|||HASH|||")[1]
+                    
+                    if not ValidadorIntegridad.validar_integridad(mensaje, hash_recibido):
+                        cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
+                        with self.lock:
+                            if cliente in self.clientes:
+                                nombre = self.clientes[cliente]['nombre']
+                                print(f"[INTEGRIDAD] Mensaje rechazado de {nombre}: hash SHA-256 no coincide")
                         continue
                     
                     if mensaje == "DESCONEXION_CLIENTE":

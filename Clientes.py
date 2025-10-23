@@ -1,19 +1,8 @@
 import socket
 import threading
 
-# ============================================================================
-# SELECCIONA EL TIPO DE CIFRADO QUE VAS A USAR:
-# Descomenta UNA de las siguientes líneas (deja la otra comentada)
-# IMPORTANTE: Debe ser el MISMO tipo que el Servidor.py
-# ============================================================================
-
-# Cifrado Simétrico (Fernet/AES)
-# from cifrado_simetrico import Cifrador
-
-# Cifrado Asimétrico (RSA)
-from cifrado_asimetrico import Cifrador
-
-# ===================== Línea separadora de dependencias =====================
+from cifrado_simetrico import Cifrador
+from validacion_integridad import ValidadorIntegridad
 
 class ClienteChat:
     def __init__(self, host='localhost', puerto=5555):
@@ -23,15 +12,11 @@ class ClienteChat:
         self.nombre = ""
         self.conectado = False
         
-        # Para simétrico
-        # self.cifrador = Cifrador()
-        # Descomentar para asimétrico
-        self.cifrador = Cifrador(es_servidor=False)
+        self.cifrador = Cifrador()
         
         self.es_asimetrico = hasattr(self.cifrador, '_validar_puede_descifrar')
         
     def conectar(self):
-        """Conecta al servidor de chat"""
         try:
             self.cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.cliente.connect((self.host, self.puerto))
@@ -50,8 +35,13 @@ class ClienteChat:
                     if not nombre_cifrado:
                         print("Error al cifrar el nombre. Intenta de nuevo.")
                         continue
+                    
+                    nombre_con_hash = ValidadorIntegridad.agregar_hash(self.nombre, nombre_cifrado)
+                    if not nombre_con_hash:
+                        print("Error al agregar validación de integridad. Intenta de nuevo.")
+                        continue
                         
-                    self.cliente.send(nombre_cifrado.encode('utf-8'))
+                    self.cliente.send(nombre_con_hash.encode('utf-8'))
                     
                     confirmacion = self.cliente.recv(4096).decode('utf-8')
                     
@@ -72,6 +62,10 @@ class ClienteChat:
                     elif confirmacion == "NOMBRE_EN_USO":
                         print("Ese nombre ya está en uso. Por favor elige otro.")
                         continue
+                    
+                    elif confirmacion == "INTEGRIDAD_FALLIDA":
+                        print("Error de integridad en la comunicación. Intenta de nuevo.")
+                        continue
                         
                     else:
                         print("Error inesperado del servidor")
@@ -88,7 +82,6 @@ class ClienteChat:
             return False
     
     def escuchar_servidor(self):
-        """Escucha mensajes del servidor en un hilo separado"""
         while self.conectado:
             try:
                 mensaje = self.cliente.recv(4096).decode('utf-8')
@@ -99,6 +92,8 @@ class ClienteChat:
                     print("Anti-spam: Espera 2 segundos entre mensajes")
                 elif mensaje == "MENSAJE_INVALIDO":
                     print("Mensaje inválido")
+                elif mensaje == "INTEGRIDAD_FALLIDA":
+                    print("Su mensaje no pudo ser enviado (error de integridad)")
                 elif mensaje.startswith("COMANDO_RESPUESTA:"):
                     respuesta = mensaje.replace("COMANDO_RESPUESTA:", "")
                     print(respuesta)
@@ -148,7 +143,6 @@ class ClienteChat:
         print("\n Conexión con el servidor perdida.")
     
     def enviar_mensajes(self):
-        """Permite al usuario enviar mensajes"""
         while self.conectado:
             try:
                 mensaje = input()
@@ -165,8 +159,14 @@ class ClienteChat:
                 if not mensaje_cifrado:
                     print("Error al cifrar mensaje. Intenta de nuevo.")
                     continue
+                
+                mensaje_con_hash = ValidadorIntegridad.agregar_hash(mensaje, mensaje_cifrado)
+                
+                if not mensaje_con_hash:
+                    print("Error al agregar validación de integridad. Intenta de nuevo.")
+                    continue
                     
-                self.cliente.send(mensaje_cifrado.encode('utf-8'))
+                self.cliente.send(mensaje_con_hash.encode('utf-8'))
                 
                 if not mensaje.startswith('/'):
                     print(f"Tu: {mensaje}")
@@ -181,11 +181,11 @@ class ClienteChat:
                 break
     
     def desconectar(self):
-        """Desconecta del servidor"""
         if self.conectado and self.cliente:
             try:
                 mensaje_desconexion_cifrado = self.cifrador.cifrar_mensaje("DESCONEXION_CLIENTE")
-                self.cliente.send(mensaje_desconexion_cifrado.encode('utf-8'))
+                mensaje_desconexion_con_hash = ValidadorIntegridad.agregar_hash("DESCONEXION_CLIENTE", mensaje_desconexion_cifrado)
+                self.cliente.send(mensaje_desconexion_con_hash.encode('utf-8'))
             except:
                 pass
         
@@ -198,7 +198,6 @@ class ClienteChat:
         print("Desconectado del servidor")
     
     def iniciar(self):
-        """Inicia el cliente de chat"""
         if not self.conectar():
             return
         
