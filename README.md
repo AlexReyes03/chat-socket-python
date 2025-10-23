@@ -72,12 +72,11 @@ Sistema de chat multiusuario cliente-servidor desarrollado en Python con soporte
 - Protección contra replay attacks (combinado con anti-spam)
 
 #### Archivos Nuevos
-- `validacion_integridad.py` - Módulo de validación SHA-256
+- `validacion_integridad.py` - 4f8e08038d4c3e70402d5223fbfade06 - Módulo de validación SHA-256
 
 #### Archivos Modificados
-- `Servidor.py` - Integración con validación de integridad
-- `Clientes.py` - Integración con validación de integridad
-- `pruebas_cifrado.py` - Pruebas de validación SHA-256 agregadas
+- `Servidor.py` - a6c7db01a8d3cf773e15526f08e8718a - Integración con validación de integridad
+- `Clientes.py` - ff90443a55f7e0d6ea10deae6ed0d651 - Integración con validación de integridad
 
 #### Características de Seguridad
 - **Validación de Integridad:** SHA-256 hash verification
