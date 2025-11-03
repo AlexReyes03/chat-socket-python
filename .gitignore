@@ -1,0 +1,20 @@
+# Archivos autogenerados
+.cursor/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Variables de ambiente (contiene claves secretas)
+.env
+
+# Certificados SSL
+certs/
+*.crt
+*.key
+*.pem
+
+# Claves RSA
+keys/
+rsa_*.pem

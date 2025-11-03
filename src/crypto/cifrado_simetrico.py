@@ -2,26 +2,24 @@ import base64
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from src.config.config import Config
 
-CLAVE_SECRETA = "mi_clave_super_secreta_2025_chat_grupal"
-SALT = b'salt_estatico_12345'
 
 class Cifrador:
-    
     def __init__(self):
         self.clave_fernet = self._generar_clave_fernet()
-    
+
     def _generar_clave_fernet(self):
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=SALT,
-            iterations=100000,
+            salt=Config.SALT,
+            iterations=Config.PBKDF2_ITERATIONS,
         )
-        clave_derivada = kdf.derive(CLAVE_SECRETA.encode())
+        clave_derivada = kdf.derive(Config.CLAVE_SECRETA.encode())
         clave_base64 = base64.urlsafe_b64encode(clave_derivada)
         return clave_base64
-    
+
     def cifrar_mensaje(self, mensaje):
         try:
             mensaje_cifrado = self._cifrar_fernet(mensaje)
@@ -29,7 +27,7 @@ class Cifrador:
         except Exception as e:
             print(f"Error cifrando mensaje: {e}")
             return None
-    
+
     def descifrar_mensaje(self, mensaje_cifrado):
         try:
             mensaje_bytes = mensaje_cifrado.encode('utf-8')
@@ -38,7 +36,7 @@ class Cifrador:
         except Exception as e:
             print(f"Error descifrando mensaje: {e}")
             return None
-    
+
     def cifrar_datos_usuario(self, nombre, ip, puerto):
         try:
             nombre_cifrado = self._cifrar_fernet(nombre).decode('utf-8')
@@ -48,7 +46,7 @@ class Cifrador:
         except Exception as e:
             print(f"Error cifrando datos de usuario: {e}")
             return None, None, None
-    
+
     def descifrar_datos_usuario(self, nombre_cifrado, ip_cifrada, puerto_cifrado):
         try:
             nombre = self._descifrar_fernet(nombre_cifrado.encode('utf-8'))
@@ -68,7 +66,7 @@ class Cifrador:
         except Exception as e:
             print(f"Error en cifrado Fernet: {e}")
             return None
-    
+
     def _cifrar_nombre_usuario(self, nombre):
         try:
             if len(nombre) < 2 or len(nombre) > 20:
@@ -87,7 +85,7 @@ class Cifrador:
         except Exception as e:
             print(f"Error en descifrado Fernet: {e}")
             return None
-    
+
     def _descifrar_puerto(self, puerto_cifrado):
         try:
             puerto_str = self._descifrar_fernet(puerto_cifrado.encode('utf-8'))
@@ -99,22 +97,24 @@ class Cifrador:
 
 if __name__ == "__main__":
     print("Probando modulo de cifrado simetrico...")
-    
+
     cifrador = Cifrador()
-    
+
     mensaje_original = "Hola mundo!"
     mensaje_cifrado = cifrador.cifrar_mensaje(mensaje_original)
     mensaje_descifrado = cifrador.descifrar_mensaje(mensaje_cifrado)
-    
+
     print(f"Mensaje original: {mensaje_original}")
     print(f"Mensaje cifrado: {mensaje_cifrado}")
     print(f"Mensaje descifrado: {mensaje_descifrado}")
     print(f"Coinciden: {mensaje_original == mensaje_descifrado}")
-    
+
     nombre, ip, puerto = "Usuario1", "127.0.0.1", 54321
     nombre_c, ip_c, puerto_c = cifrador.cifrar_datos_usuario(nombre, ip, puerto)
     nombre_d, ip_d, puerto_d = cifrador.descifrar_datos_usuario(nombre_c, ip_c, puerto_c)
-    
+
     print(f"\nDatos originales: {nombre}, {ip}, {puerto}")
     print(f"Datos descifrados: {nombre_d}, {ip_d}, {puerto_d}")
     print(f"Coinciden: {nombre == nombre_d and ip == ip_d and puerto == puerto_d}")
+
+

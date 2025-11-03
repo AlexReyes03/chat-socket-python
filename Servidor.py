@@ -1,363 +1,403 @@
-import socket
-import threading
+import asyncio
+import websockets
 import time
-from utils import validar_mensaje, es_comando, procesar_comando
-
-from cifrado_simetrico import Cifrador
-from validacion_integridad import ValidadorIntegridad
+from src.utils.utils import validar_mensaje, es_comando, procesar_comando
+from src.config.config import Config
+from src.security.ssl_manager import SSLManager
+from src.security.validacion_integridad import ValidadorIntegridad
 
 class ServidorChat:
-    def __init__(self, host='localhost', puerto=5555):
-        self.host = host
-        self.puerto = puerto
+    def __init__(self):
+        self.host = Config.SERVER_HOST
+        self.puerto = Config.SERVER_PORT
         self.clientes = {}
         self.historial = []
-        self.lock = threading.Lock()
         self.servidor_activo = True
-        self.servidor = None
+        self.cifrador = None
+        self.tipo_cifrado = None
+        self.servidor_websocket = None
         
-        self.cifrador = Cifrador()
+    def seleccionar_cifrado(self):
+        print("\n" + "="*70)
+        print("CONFIGURACION DE CIFRADO")
+        print("="*70)
         
-        self.es_asimetrico = hasattr(self.cifrador, '_validar_puede_descifrar')
+        print("\nSelecciona el tipo de cifrado a utilizar:")
+        print("1. Cifrado Simetrico (Fernet/AES-128)")
+        print("2. Cifrado Asimetrico (RSA-2048)")
         
-    def iniciar_servidor(self):
-        self.servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        while True:
+            try:
+                opcion = input("\nOpcion (1-2): ").strip()
+                if opcion == "1":
+                    self.tipo_cifrado = "simetrico"
+                    break
+                elif opcion == "2":
+                    self.tipo_cifrado = "asimetrico"
+                    break
+                else:
+                    print("Opcion invalida. Selecciona 1 o 2")
+            except KeyboardInterrupt:
+                print("\n\nConfiguracion cancelada")
+                return False
         
-        try:
-            self.servidor.bind((self.host, self.puerto))
-            self.servidor.listen(5)
-            print(f"Servidor principal:")
-            print(f"Escuchando en el puerto {self.puerto}")
-            tipo_cifrado = "Asimétrico (RSA)" if self.es_asimetrico else "Simétrico (Fernet)"
-            print(f"Tipo de cifrado: {tipo_cifrado}")
-            print(f"Validacion de integridad: SHA-256 activa")
-            print("Comandos del servidor: /shutdown - Cerrar servidor")
-            print("-" * 50)
-            
-            hilo_comandos = threading.Thread(target=self.manejar_comandos_servidor)
-            hilo_comandos.daemon = True
-            hilo_comandos.start()
-            
-            while self.servidor_activo:
-                try:
-                    self.servidor.settimeout(1.0)
-                    cliente, direccion = self.servidor.accept()
-                    
-                    if not self.servidor_activo:
-                        cliente.close()
-                        break
-                    
-                    print(f"Nueva conexión desde {direccion[0]}:{direccion[1]} - Procesando registro...")
-                    
-                    hilo_registro = threading.Thread(
-                        target=self.procesar_nuevo_cliente,
-                        args=(cliente, direccion)
-                    )
-                    hilo_registro.daemon = True
-                    hilo_registro.start()
-                    
-                except socket.timeout:
-                    continue
-                except Exception as e:
-                    if self.servidor_activo:
-                        print(f"Error aceptando conexión: {e}")
-                
-        except Exception as e:
-            print(f"Error en el servidor: {e}")
-        finally:
-            self.cerrar_servidor()
+        print(f"\nTipo de cifrado seleccionado: {self.tipo_cifrado.upper()}")
+        
+        if self.tipo_cifrado == "simetrico":
+            from src.crypto.cifrado_simetrico import Cifrador
+            self.cifrador = Cifrador()
+            self.es_asimetrico = False
+        else:
+            from src.crypto.cifrado_asimetrico import Cifrador
+            self.cifrador = Cifrador(es_servidor=True)
+            self.es_asimetrico = True
+        
+        print("Cifrador inicializado correctamente")
+        return True
     
-    def manejar_comandos_servidor(self):
+    def configurar_ssl(self):
+        print("\n" + "="*70)
+        print("CONFIGURACION SSL/TLS")
+        print("="*70)
+        
+        cert_file = Config.SSL_CERT_FILE
+        key_file = Config.SSL_KEY_FILE
+        
+        if Config.SSL_AUTO_GENERAR:
+            print("\nGenerando certificados SSL autofirmados...")
+            if not SSLManager.verificar_certificados_existen(cert_file, key_file):
+                if not SSLManager.generar_certificado_autofirmado(
+                    cert_file, key_file, Config.SSL_CERT_VALIDITY_DAYS
+                ):
+                    print("Error: No se pudieron generar los certificados SSL")
+                    return None
+            else:
+                print(f"Certificados SSL existentes encontrados:")
+                print(f"  Certificado: {cert_file}")
+                print(f"  Clave: {key_file}")
+        
+        contexto_ssl = SSLManager.crear_contexto_ssl_servidor(cert_file, key_file)
+        if not contexto_ssl:
+            print("Error: No se pudo crear el contexto SSL")
+            return None
+        
+        print("Contexto SSL creado exitosamente")
+        return contexto_ssl
+    
+    async def iniciar_servidor(self):
+        if not self.seleccionar_cifrado():
+            return
+        
+        contexto_ssl = self.configurar_ssl()
+        if not contexto_ssl:
+            print("Error: No se pudo configurar SSL/TLS")
+            return
+        
+        print("\n" + "="*70)
+        print("SERVIDOR INICIADO")
+        print("="*70)
+        print(f"Escuchando en: wss://{self.host}:{self.puerto}")
+        tipo_cifrado_str = "Asimetrico (RSA)" if self.es_asimetrico else "Simetrico (Fernet)"
+        print(f"Tipo de cifrado: {tipo_cifrado_str}")
+        print("Validacion de integridad: SHA-256 activa")
+        print("Comandos del servidor: /shutdown - Cerrar servidor")
+        print("-" * 70)
+        print("Escribe comandos en la terminal del servidor (ej: /shutdown)")
+        
+        asyncio.create_task(self.manejar_comandos_servidor())
+        
+        async with websockets.serve(
+            self.manejar_cliente,
+            self.host,
+            self.puerto,
+            ssl=contexto_ssl
+        ) as servidor:
+            self.servidor_websocket = servidor
+            # Esperar hasta que el servidor se cierre
+            while self.servidor_activo:
+                await asyncio.sleep(0.1)
+    
+    async def manejar_comandos_servidor(self):
         while self.servidor_activo:
             try:
-                comando = input().strip()
+                # Leer comandos de la terminal de manera asíncrona
+                loop = asyncio.get_event_loop()
+                comando = await loop.run_in_executor(None, input)
+                
+                if not comando or not comando.strip():
+                    continue
+                
+                comando = comando.strip()
                 
                 if comando.lower() == "/shutdown":
-                    self.procesar_shutdown()
+                    print("\nIniciando cierre del servidor...")
+                    await self.cerrar_servidor()
+                    break
                 elif comando.lower() == "/help":
-                    print("Comandos disponibles:")
-                    print("/shutdown - Cerrar servidor ordenadamente")
-                    print("/help - Mostrar esta ayuda")
-                elif comando.strip() and comando.startswith("/"):
-                    print(f"Comando '{comando}' no reconocido. Use /help para ver comandos disponibles.")
-                    
-            except (EOFError, KeyboardInterrupt):
-                self.procesar_shutdown()
+                    print("\nComandos disponibles:")
+                    print("  /shutdown - Cerrar el servidor y desconectar todos los clientes")
+                    print("  /help - Mostrar esta ayuda")
+                else:
+                    print(f"Comando no reconocido: {comando}. Usa /help para ver comandos disponibles.")
+                
+            except EOFError:
+                # Ctrl+D o fin de entrada
                 break
             except Exception as e:
                 if self.servidor_activo:
-                    print(f"Error procesando comando: {e}")
+                    print(f"Error en manejar_comandos_servidor: {e}")
+                await asyncio.sleep(0.1)
     
-    def procesar_nuevo_cliente(self, cliente, direccion):
-        ip = direccion[0]
-        puerto_cliente = direccion[1]
+    async def manejar_cliente(self, websocket):
+        cliente_ip = websocket.remote_address[0]
+        cliente_puerto = websocket.remote_address[1]
+        
+        print(f"Nueva conexion desde {cliente_ip}:{cliente_puerto} - Procesando registro...")
         
         try:
-            cliente.send("NOMBRE_USUARIO".encode('utf-8'))
+            # Informar al cliente el tipo de cifrado del servidor para que se adapte
+            await websocket.send(f"CONFIG:{'ASIMETRICO' if self.es_asimetrico else 'SIMETRICO'}")
+            await websocket.send("NOMBRE_USUARIO")
             
-            cliente.settimeout(30.0)
-            
-            nombre_con_hash = cliente.recv(4096).decode('utf-8').strip()
+            nombre_con_hash = await asyncio.wait_for(websocket.recv(), timeout=30.0)
             
             if not nombre_con_hash or not self.servidor_activo:
-                cliente.close()
+                await websocket.close()
                 return
             
             nombre_cifrado, hash_valido = ValidadorIntegridad.validar_y_extraer(nombre_con_hash)
             
-            if not hash_valido or not nombre_cifrado:
-                cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
-                cliente.close()
-                print(f"[INTEGRIDAD] Registro rechazado desde {ip}: formato de hash invalido")
+            if not hash_valido:
+                await websocket.send("INTEGRIDAD_FALLIDA")
+                await websocket.close()
+                print(f"[INTEGRIDAD] Registro rechazado desde {cliente_ip}: formato de hash invalido")
                 return
             
             nombre = self.cifrador.descifrar_mensaje(nombre_cifrado)
             
             if not nombre:
-                cliente.send("NOMBRE_INVALIDO".encode('utf-8'))
-                cliente.close()
-                print(f"Registro rechazado desde {ip}: error al descifrar nombre")
+                await websocket.send("NOMBRE_INVALIDO")
+                await websocket.close()
+                print(f"Registro rechazado desde {cliente_ip}: error al descifrar nombre")
                 return
             
             hash_recibido = nombre_con_hash.split("|||HASH|||")[1]
-            
             if not ValidadorIntegridad.validar_integridad(nombre, hash_recibido):
-                cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
-                cliente.close()
-                print(f"[INTEGRIDAD] Registro rechazado desde {ip}: hash SHA-256 no coincide para nombre '{nombre}'")
+                await websocket.send("INTEGRIDAD_FALLIDA")
+                await websocket.close()
+                print(f"[INTEGRIDAD] Registro rechazado desde {cliente_ip}: hash SHA-256 no coincide")
                 return
             
-            from utils import validar_nombre_usuario
+            from src.utils.utils import validar_nombre_usuario
             if not validar_nombre_usuario(nombre):
-                cliente.send("NOMBRE_INVALIDO".encode('utf-8'))
-                cliente.close()
-                print(f"Registro rechazado desde {ip}: nombre inválido '{nombre}'")
+                await websocket.send("NOMBRE_INVALIDO")
+                await websocket.close()
+                print(f"Registro rechazado desde {cliente_ip}: nombre invalido '{nombre}'")
                 return
             
-            with self.lock:
-                nombres_en_uso = [info['nombre'].lower() for info in self.clientes.values()]
-                if nombre.lower() in nombres_en_uso:
-                    cliente.send("NOMBRE_EN_USO".encode('utf-8'))
-                    cliente.close()
-                    print(f"Registro rechazado desde {ip}: nombre '{nombre}' ya está en uso")
-                    return
-                
-                self.clientes[cliente] = {
-                    'nombre': nombre,
-                    'ip': ip,
-                    'puerto': puerto_cliente,
-                    'ultimo_mensaje': 0
-                }
+            nombres_en_uso = [info['nombre'].lower() for info in self.clientes.values()]
+            if nombre.lower() in nombres_en_uso:
+                await websocket.send("NOMBRE_EN_USO")
+                await websocket.close()
+                print(f"Registro rechazado desde {cliente_ip}: nombre '{nombre}' ya esta en uso")
+                return
             
-            print(f"Cliente registrado exitosamente: {nombre} desde {ip}:{puerto_cliente}")
+            self.clientes[websocket] = {
+                'nombre': nombre,
+                'ip': cliente_ip,
+                'puerto': cliente_puerto,
+                'ultimo_mensaje': 0
+            }
             
-            cliente.send("CONECTADO".encode('utf-8'))
+            print(f"Cliente registrado exitosamente: {nombre} desde {cliente_ip}:{cliente_puerto}")
+            
+            await websocket.send("CONECTADO")
             
             mensaje_conexion = f"{nombre} se ha unido al chat"
-            self.enviar_a_todos(mensaje_conexion, excluir=cliente)
+            await self.enviar_a_todos(mensaje_conexion, excluir=websocket)
             
-            cliente.settimeout(None)
-            self.manejar_cliente(cliente)
+            await self.procesar_mensajes_cliente(websocket)
             
-        except socket.timeout:
-            print(f"Timeout en registro desde {ip} - conexión cerrada")
+        except asyncio.TimeoutError:
+            print(f"Timeout en registro desde {cliente_ip} - conexion cerrada")
             try:
-                cliente.close()
+                await websocket.close()
             except:
                 pass
         except Exception as e:
-            print(f"Error procesando nuevo cliente desde {ip}: {e}")
+            print(f"Error procesando nuevo cliente desde {cliente_ip}: {e}")
             try:
-                cliente.close()
+                await websocket.close()
             except:
                 pass
-
-    def procesar_shutdown(self):
-        try:
-            print("\n¿Está seguro de que desea cerrar el servidor? (y/Y para confirmar, cualquier otra tecla para cancelar)")
-            confirmacion = input("Confirmación: ").strip()
-            
-            if confirmacion.lower() == 'y':
-                print("Cerrando servidor...")
-                self.servidor_activo = False
-                
-                mensaje_cierre = "El servidor se está cerrando. Conexión terminada."
-                self.enviar_a_todos(mensaje_cierre)
-                
-                time.sleep(1)
-                
-                with self.lock:
-                    for cliente in list(self.clientes.keys()):
-                        try:
-                            cliente.close()
-                        except:
-                            pass
-                    self.clientes.clear()
-                
-                print("Servidor cerrado exitosamente.")
-                
-            else:
-                print("Cierre de servidor cancelado.")
-                
-        except (EOFError, KeyboardInterrupt):
-            print("\nForzando cierre del servidor...")
-            self.servidor_activo = False
-        except Exception as e:
-            print(f"Error durante el cierre: {e}")
-            self.servidor_activo = False
     
-    def manejar_cliente(self, cliente):
+    async def procesar_mensajes_cliente(self, websocket):
         try:
-            while self.servidor_activo:
+            async for mensaje_con_hash in websocket:
                 try:
-                    cliente.settimeout(1.0)
+                    if not self.servidor_activo:
+                        break
                     
-                    mensaje_con_hash = cliente.recv(4096).decode('utf-8')
-                    if not mensaje_con_hash:
+                    if websocket not in self.clientes:
                         break
                     
                     mensaje_cifrado, hash_valido = ValidadorIntegridad.validar_y_extraer(mensaje_con_hash)
                     
-                    if not hash_valido or not mensaje_cifrado:
-                        cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
-                        with self.lock:
-                            if cliente in self.clientes:
-                                nombre = self.clientes[cliente]['nombre']
-                                print(f"[INTEGRIDAD] Mensaje rechazado de {nombre}: formato de hash invalido")
+                    if not hash_valido:
+                        await websocket.send("INTEGRIDAD_FALLIDA")
                         continue
                     
                     mensaje = self.cifrador.descifrar_mensaje(mensaje_cifrado)
                     
                     if not mensaje:
-                        cliente.send("MENSAJE_INVALIDO".encode('utf-8'))
+                        await websocket.send("MENSAJE_INVALIDO")
                         continue
                     
                     hash_recibido = mensaje_con_hash.split("|||HASH|||")[1]
-                    
                     if not ValidadorIntegridad.validar_integridad(mensaje, hash_recibido):
-                        cliente.send("INTEGRIDAD_FALLIDA".encode('utf-8'))
-                        with self.lock:
-                            if cliente in self.clientes:
-                                nombre = self.clientes[cliente]['nombre']
-                                print(f"[INTEGRIDAD] Mensaje rechazado de {nombre}: hash SHA-256 no coincide")
+                        info_cliente = self.clientes[websocket]
+                        print(f"[INTEGRIDAD] Mensaje rechazado de {info_cliente['nombre']}: hash SHA-256 no coincide")
+                        await websocket.send("INTEGRIDAD_FALLIDA")
                         continue
                     
                     if mensaje == "DESCONEXION_CLIENTE":
                         break
+                    
+                    info_cliente = self.clientes[websocket]
+                    nombre = info_cliente['nombre']
+                    ip = info_cliente['ip']
+                    puerto = info_cliente['puerto']
+                    
+                    tiempo_actual = time.time()
+                    if tiempo_actual - info_cliente['ultimo_mensaje'] < 2:
+                        await websocket.send("SPAM_DETECTADO")
+                        continue
+                    
+                    if es_comando(mensaje):
+                        respuesta = procesar_comando(mensaje, self.clientes, self.historial)
+                        await websocket.send(f"COMANDO_RESPUESTA:{respuesta}")
+                        continue
+                    
+                    mensaje_limpio = validar_mensaje(mensaje)
+                    if not mensaje_limpio:
+                        await websocket.send("MENSAJE_INVALIDO")
+                        continue
+                    
+                    info_cliente['ultimo_mensaje'] = tiempo_actual
+                    
+                    if self.es_asimetrico:
+                        mensaje_completo = f"MENSAJE_CHAT:{ip}###SEP###{puerto}###SEP###{nombre}###SEP###{mensaje_limpio}"
                         
-                    with self.lock:
-                        if cliente not in self.clientes:
-                            break
-                            
-                        info_cliente = self.clientes[cliente]
-                        nombre = info_cliente['nombre']
-                        ip = info_cliente['ip']
-                        puerto = info_cliente['puerto']
+                        print("\n\nDATOS ENVIADOS (sin cifrar, RSA solo Cliente->Servidor):")
+                        print(f"[{ip}, {puerto}, {nombre}] {mensaje_limpio}")
+                    else:
+                        nombre_cifrado, ip_cifrada, puerto_cifrado = self.cifrador.cifrar_datos_usuario(nombre, ip, puerto)
+                        mensaje_cifrado_enviar = self.cifrador.cifrar_mensaje(mensaje_limpio)
                         
-                        tiempo_actual = time.time()
-                        if tiempo_actual - info_cliente['ultimo_mensaje'] < 2:
-                            cliente.send("SPAM_DETECTADO".encode('utf-8'))
-                            continue
+                        print("\n\nDATOS CIFRADOS:")
+                        print(f"[{ip_cifrada[:20]}..., {puerto_cifrado[:20]}..., {nombre_cifrado[:20]}...] {mensaje_cifrado_enviar[:30]}...")
+                        print("\nDATOS DESCIFRADOS:")
+                        print(f"[{ip}, {puerto}, {nombre}] {mensaje_limpio}")
                         
-                        if es_comando(mensaje):
-                            respuesta = procesar_comando(mensaje, self.clientes, self.historial)
-                            cliente.send(f"COMANDO_RESPUESTA:{respuesta}".encode('utf-8'))
-                            continue
-                        
-                        mensaje_limpio = validar_mensaje(mensaje)
-                        if not mensaje_limpio:
-                            cliente.send("MENSAJE_INVALIDO".encode('utf-8'))
-                            continue
-                        
-                        info_cliente['ultimo_mensaje'] = tiempo_actual
-                        
-                        if self.es_asimetrico:
-                            mensaje_completo = f"MENSAJE_CHAT:{ip}###SEP###{puerto}###SEP###{nombre}###SEP###{mensaje_limpio}"
-                            
-                            print("\n\nDATOS ENVIADOS (sin cifrar, RSA solo Cliente->Servidor):")
-                            print(f"[{ip}, {puerto}, {nombre}] {mensaje_limpio}")
-                        else:
-                            nombre_cifrado, ip_cifrada, puerto_cifrado = self.cifrador.cifrar_datos_usuario(nombre, ip, puerto)
-                            mensaje_cifrado_enviar = self.cifrador.cifrar_mensaje(mensaje_limpio)
-                            
-                            print("\n\nDATOS CIFRADOS:")
-                            print(f"[{ip_cifrada[:20]}..., {puerto_cifrado[:20]}..., {nombre_cifrado[:20]}...] {mensaje_cifrado_enviar[:30]}...")
-                            print("\nDATOS DESCIFRADOS:")
-                            print(f"[{ip}, {puerto}, {nombre}] {mensaje_limpio}")
-                            
-                            mensaje_completo = f"MENSAJE_CHAT:{ip_cifrada}###SEP###{puerto_cifrado}###SEP###{nombre_cifrado}###SEP###{mensaje_cifrado_enviar}"
-                        
-                        self.historial.append((tiempo_actual, nombre, ip, puerto, mensaje_limpio))
-                        if len(self.historial) > 10:
-                            self.historial.pop(0)
-                        
-                        self.enviar_a_todos(mensaje_completo, excluir=cliente)
-                        
-                except socket.timeout:
-                    continue
-                except ConnectionResetError:
-                    break
+                        mensaje_completo = f"MENSAJE_CHAT:{ip_cifrada}###SEP###{puerto_cifrado}###SEP###{nombre_cifrado}###SEP###{mensaje_cifrado_enviar}"
+                    
+                    self.historial.append((tiempo_actual, nombre, ip, puerto, mensaje_limpio))
+                    if len(self.historial) > 10:
+                        self.historial.pop(0)
+                    
+                    await self.enviar_a_todos(mensaje_completo, excluir=websocket)
+                    
                 except Exception as e:
                     if self.servidor_activo:
-                        if "10054" not in str(e) and "forcibly closed" not in str(e).lower():
-                            print(f"Error recibiendo mensaje de cliente: {e}")
+                        print(f"Error procesando mensaje: {e}")
                     break
                     
+        except websockets.exceptions.ConnectionClosed:
+            pass
         except Exception as e:
             if self.servidor_activo:
-                print(f"Error manejando cliente: {e}")
+                print(f"Error en procesar_mensajes_cliente: {e}")
         finally:
-            self.desconectar_cliente(cliente)
+            await self.desconectar_cliente(websocket)
     
-    def enviar_a_todos(self, mensaje, excluir=None):
-        clientes_a_eliminar = []
+    async def enviar_a_todos(self, mensaje, excluir=None):
+        clientes_desconectados = []
         
-        for cliente in list(self.clientes.keys()):
-            if cliente == excluir:
+        for websocket in list(self.clientes.keys()):
+            if websocket == excluir:
                 continue
-                
-            try:
-                cliente.send(mensaje.encode('utf-8'))
-            except:
-                clientes_a_eliminar.append(cliente)
-        
-        for cliente in clientes_a_eliminar:
-            self.desconectar_cliente(cliente)
-    
-    def desconectar_cliente(self, cliente):
-        try:
-            with self.lock:
-                if cliente in self.clientes:
-                    info_cliente = self.clientes[cliente]
-                    nombre = info_cliente['nombre']
-                    print(f"Cliente desconectado: {nombre}")
-                    
-                    if self.servidor_activo:
-                        mensaje_desconexion = f"{nombre} ha salido del chat"
-                        self.enviar_a_todos(mensaje_desconexion, excluir=cliente)
-                    
-                    del self.clientes[cliente]
             
-            cliente.close()
+            try:
+                await websocket.send(mensaje)
+            except:
+                clientes_desconectados.append(websocket)
+        
+        for websocket in clientes_desconectados:
+            await self.desconectar_cliente(websocket)
+    
+    async def desconectar_cliente(self, websocket):
+        try:
+            if websocket in self.clientes:
+                info_cliente = self.clientes[websocket]
+                nombre = info_cliente['nombre']
+                print(f"Cliente desconectado: {nombre}")
+                
+                if self.servidor_activo:
+                    mensaje_desconexion = f"{nombre} ha salido del chat"
+                    await self.enviar_a_todos(mensaje_desconexion, excluir=websocket)
+                
+                del self.clientes[websocket]
+            
+            await websocket.close()
         except:
             pass
     
-    def cerrar_servidor(self):
-        if self.servidor:
+    async def cerrar_servidor(self):
+        """Cierra el servidor y desconecta todos los clientes"""
+        print("\nCerrando servidor...")
+        self.servidor_activo = False
+        
+        mensaje_cierre = "El servidor se esta cerrando. Conexion terminada."
+        
+        # Desconectar todos los clientes
+        clientes_desconectar = list(self.clientes.keys())
+        for websocket in clientes_desconectar:
             try:
-                self.servidor.close()
+                await websocket.send(mensaje_cierre)
+                await websocket.close()
             except:
                 pass
-        print("Recursos del servidor liberados.")
+        
+        self.clientes.clear()
+        
+        # Cerrar el servidor
+        if self.servidor_websocket:
+            try:
+                self.servidor_websocket.close()
+                # Esperar un poco para que el servidor se cierre correctamente
+                await asyncio.sleep(0.5)
+            except:
+                pass
+        
+        print("Servidor cerrado correctamente.")
+
+
+async def main():
+    try:
+        servidor = ServidorChat()
+        await servidor.iniciar_servidor()
+    except KeyboardInterrupt:
+        print("\n\nServidor interrumpido por el usuario")
+    except Exception as e:
+        print(f"Error fatal: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("Servidor terminado.")
+
 
 if __name__ == "__main__":
     try:
-        servidor = ServidorChat()
-        servidor.iniciar_servidor()
+        asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nInterrumpido por el usuario.")
-    except Exception as e:
-        print(f"Error fatal: {e}")
-    finally:
-        print("Programa terminado.")
+        print("\nPrograma terminado por el usuario")
