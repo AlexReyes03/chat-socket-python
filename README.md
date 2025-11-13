@@ -119,18 +119,18 @@ Sistema de chat multiusuario cliente-servidor desarrollado en Python con soporte
 
 #### Archivos Nuevos
 
-- `src/config/config.py` – Carga de variables de entorno y validaciones
-- `src/security/ssl_manager.py` – Gestión de certificados y contextos TLS/SSL
-- `src/security/validacion_integridad.py` – Reubicado bajo `src/security`
-- `src/crypto/cifrado_simetrico.py` – Reubicado bajo `src/crypto`
-- `src/crypto/cifrado_asimetrico.py` – Reubicado bajo `src/crypto`
-- `src/utils/utils.py` – Reubicado bajo `src/utils`
+- `src/config/config.py` - dfa915afcdee8865808fcd199d447549 - Carga de variables de entorno y validaciones
+- `src/security/ssl_manager.py` - 265e7499bfe6bf6e36ba1689e28aee86 - Gestión de certificados y contextos TLS/SSL
+- `src/security/validacion_integridad.py` - 3516664df4a2029948b8c3ab5586f492 - Reubicado bajo `src/security`
+- `src/crypto/cifrado_simetrico.py` - 3bc112bfff631c04164fd74b0a98a09f - Reubicado bajo `src/crypto`
+- `src/crypto/cifrado_asimetrico.py` - 96868eb9ce204b5c9b05922c3503ed27 - Reubicado bajo `src/crypto`
+- `src/utils/utils.py` - b0dbc19f7b5292beec4d84b645c46393 - Reubicado bajo `src/utils`
 
 #### Archivos Modificados
 
-- `Servidor.py` – Menú de selección de cifrado, anuncio de modo al cliente, lectura de comandos (`/shutdown`), WSS
-- `Clientes.py` – Adaptación automática al modo de cifrado del servidor
-- `env.example` – Variables `SSL_*`, `CLAVE_SECRETA`, `SALT`, `PBKDF2_ITERATIONS`, `RSA_*`
+- `Servidor.py` - 21ec11a4c1c5355f5f1c91a99d1f7530 - Menú de selección de cifrado, anuncio de modo al cliente, lectura de comandos (`/shutdown`), WSS
+- `Clientes.py` - 6ca09d5c5c6e9e770c6d7bb1d7300acf - Adaptación automática al modo de cifrado del servidor
+- `env.example` - d97f20f661f233c1157b81cb2b1c97e4 - Variables `SSL_*`, `CLAVE_SECRETA`, `SALT`, `PBKDF2_ITERATIONS`, `RSA_*`
 
 #### Características
 
